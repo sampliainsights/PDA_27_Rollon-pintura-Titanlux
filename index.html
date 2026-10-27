@@ -624,8 +624,6 @@ const CONFIG = {
   snapshotDate: '26 de octubre de 2026',
   // Solo se leen las columnas A a I de la hoja (de «Marca temporal» a «Sentimiento»)
   maxCols: 9,
-  // Personas que dicen no haber recibido o probado el producto: sus respuestas no valoran el producto y se excluyen del informe
-  notReceived: /no me (lo |mo )?(han |ha )?(dado|dieron|entregaron)|no (lo )?(he )?recibido|no lo he probado|no puedo valorar el producto|no lo he usado|no lo he podido probar|no he podido probar|no habia este producto|no estaba en (mi|el) lote|no se m\w* (ha |han )?(facilit|entreg)|aun no he probado|no he probado el producto|no he podido ni podre probarlo|no puedo dar opiniones/,
   // Hoja de respuestas de Google Forms: las cabeceras son el texto de la pregunta, no un question_id
   attrs: [
     { k: 'glob', label: 'Valoración global',        short: 'Valoración global', art: 'La valoración global',      rx: /valoraci[oó]n global/i, q: '¿Cuál es tu valoración global de este producto?' },
@@ -652,7 +650,7 @@ const SENT_COLORS = { Positivo: C.dusk, Neutro: C.neutral, Negativo: C.rasp };
 const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const state = {
-  rows: [], headers: {}, source: '', liveErrors: [], excluded: 0, preExcluded: 0,
+  rows: [], headers: {}, source: '', liveErrors: [],
   f: { compra: 'all', gen: 'all', age: 'all' },
   compare: true,
   vb: { q: '', sent: 'all', theme: null, limit: 12 }
@@ -753,20 +751,13 @@ function fromSamplia(matrix) {
   if (hi < 0) return null;
   const heads = matrix[hi].map(h => String(h).trim());
   const col = k => heads.indexOf(S[k]);
-  const rc = S.recibido ? heads.indexOf(S.recibido) : -1;
   const miss = ['ts', 'compra', 'porque', ...CONFIG.attrs.map(a => a.k)].filter(k => col(k) < 0);
   if (miss.length) throw new Error('Formato Samplia: faltan las columnas ' + miss.map(k => S[k]).join(', '));
   const head = ['Marca temporal', ...CONFIG.attrs.map(a => a.q), '¿Comprarías este producto?', '¿Por qué?', 'Sentimiento'];
-  let excl = 0;
-  const body = matrix.slice(hi + 1).filter(r => {
-    if (rc >= 0 && /^no\b/.test(norm(String(r[rc] ?? '').trim()))) { excl++; return false; }
-    return true;
-  }).map(r => [r[col('ts')], ...CONFIG.attrs.map(a => r[col(a.k)]), r[col('compra')], r[col('porque')], '']);
-  state.preExcluded = excl;
+  const body = matrix.slice(hi + 1).map(r => [r[col('ts')], ...CONFIG.attrs.map(a => r[col(a.k)]), r[col('compra')], r[col('porque')], '']);
   return [head, ...body];
 }
 function toMatrix(txt) {
-  state.preExcluded = 0;
   const raw = parseCSV(txt);
   const m = fromSamplia(raw) || raw;
   if (!m.some(r => r.some(c => CONFIG.attrs[0].rx.test(String(c))))) throw new Error('Respuesta sin cabeceras esperadas (¿hoja sin acceso público?)');
@@ -789,10 +780,9 @@ function buildRows(matrix) {
   state.headers = Object.fromEntries(Object.entries(idx).map(([k, i]) => [k, heads[i]]));
 
   const num = v => { const n = parseFloat(String(v ?? '').replace(',', '.')); return (n >= 1 && n <= 5) ? n : null; };
-  const rows = []; state.excluded = state.preExcluded || 0;
+  const rows = [];
   matrix.slice(hi + 1).forEach(r => {
     const get = k => idx[k] == null ? '' : String(r[idx[k]] ?? '').replace(/\uFFFC/g, '').replace(/<br\s*\/?>/gi, ' ').trim();
-    if (CONFIG.notReceived && CONFIG.notReceived.test(norm(get('porque')))) { state.excluded++; return; }
     const o = { ts: get('ts'), porque: emptyAnswer(get('porque')) ? '' : get('porque'), cat: get('cat') };
     CONFIG.attrs.forEach(a => o[a.k] = num(get(a.k)));
     const cp = norm(get('compra'));
@@ -831,7 +821,7 @@ async function loadData() {
       try {
         const txt = await fetchText(url);
         state.rows = buildRows(toMatrix(txt)); state.source = 'live';
-        setStatus('live', `Datos en vivo de la hoja (${state.rows.length} respuestas${exNote()})`);
+        setStatus('live', `Datos en vivo de la hoja (${state.rows.length} respuestas)`);
         return;
       } catch (e) {
         errors.push(src.name + ': ' + e.message);
@@ -843,13 +833,11 @@ async function loadData() {
   const snap = $('#snapshot').textContent.trim();
   state.rows = buildRows(toMatrix(snap)); state.source = 'local';
   console.error('[datos] Sin conexión con la hoja; se muestra la copia local.', errors);
-  setStatus('local', `Copia local del ${CONFIG.snapshotDate} (${state.rows.length} respuestas${exNote()}). Sin conexión con la hoja.`);
+  setStatus('local', `Copia local del ${CONFIG.snapshotDate} (${state.rows.length} respuestas). Sin conexión con la hoja.`);
 }
-const exNote = () => state.excluded ? `; ${state.excluded} excluidas por no haber recibido o probado el producto` : '';
 function footNote() {
   const el = $('#footSrc'); if (!el) return;
-  el.textContent = 'Samplia Insights. Datos de la hoja de respuestas de la encuesta.' +
-    (state.excluded ? ` Se excluyen ${state.excluded} respuestas de personas que indican no haber recibido o probado el producto.` : '');
+  el.textContent = 'Samplia Insights. Datos de la hoja de respuestas de la encuesta.';
 }
 function setStatus(kind, text) { const el = $('#status'); el.className = 'status ' + kind; el.lastElementChild.textContent = text; }
 
